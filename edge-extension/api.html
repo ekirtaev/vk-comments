@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>VK Comments — API</title><link rel="stylesheet" href="api.css"></head>
+<body><main>
+<h1>Комментарии VK → Excel</h1>
+<p>Выгрузка через VK API. Установка Python и открытая страница поста не нужны.</p>
+<label for="url">Ссылка на пост</label>
+<input id="url" type="url" value="https://vk.com/wall-114057117_161253" autocomplete="off">
+<label for="token">Токен VK API</label>
+<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Сервисный ключ или пользовательский токен">
+<p class="small">Токен хранится только в памяти этой вкладки и отправляется только api.vk.com. В файлы не записывается. Вход в VK сам по себе токен не предоставляет.</p>
+<div class="buttons"><button id="check">Проверить доступ</button><button id="start">Start — выгрузить</button><button id="stop" disabled>Стоп</button></div>
+<p id="status" role="status">Сначала проверь доступ. Затем запусти полный обход комментариев и ответов.</p>
+<div class="buttons"><button id="csv" disabled>Скачать CSV</button><button id="xlsx" disabled>Скачать XLSX</button><button id="json" disabled>Данные и отчёт JSON</button></div>
+<p class="notice">Не закрывай эту вкладку до скачивания. При остановке можно сохранить собранное. Полнота оценивается по отчёту; завершение обхода не гарантирует совпадение со счётчиком VK.</p>
+<pre id="details"></pre>
+</main><script src="api-core.js"></script><script src="xlsx.js"></script><script src="api.js"></script></body></html>

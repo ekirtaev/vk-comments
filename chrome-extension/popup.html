@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>VK Comments</title>
+<link rel="stylesheet" href="popup.css"></head>
+<body>
+<h1>VK Comments</h1>
+<p>Открой отдельную страницу поста VK. Выбери показ всех комментариев и хронологический порядок, если такие настройки доступны.</p>
+<p class="notice">Экспериментальный сбор через страницу. Полнота выгрузки не подтверждена.</p>
+<div class="buttons"><button id="start">Start</button><button id="stop">Стоп</button></div>
+<p id="status" role="status">Подключение к вкладке…</p>
+<div class="buttons"><button id="csv">Скачать CSV</button><button id="xlsx">Скачать XLSX</button></div>
+<button id="report">Скачать данные и отчёт JSON</button>
+<div class="buttons"><button id="pick">Выбрать комментарий для диагностики</button><button id="diagnostics">Скачать диагностику</button></div>
+<p class="small">Если собрано 0: нажми «Выбрать комментарий», затем щёлкни по тексту комментария на странице. Снова открой расширение и скачай диагностику. Она содержит выбранный фрагмент комментариев — проверь файл перед отправкой.</p>
+<p class="small">Можно закрыть это окно: сбор продолжится в текущей вкладке. Не обновляй и не закрывай вкладку до скачивания. Токен и пароль не нужны.</p>
+<details><summary>Дополнительный API-режим</summary><button id="api">Открыть выгрузку через API</button><p class="small">Требует токен. Работает в отдельной вкладке.</p></details>
+<script src="xlsx.js"></script><script src="popup.js"></script>
+</body></html>
