@@ -4,7 +4,7 @@
   const state = { running: false, stop: false, records: new Map(), report: null, message: 'Готов к запуску.' };
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const visible = el => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
-  const commentSelector = '[id^="reply"], [id^="comment"], [data-comment-id], [data-reply-id]';
+  const commentSelector = '[id^="reply"], [id^="comment"], [data-comment-id], [data-reply-id], [data-testid="comment"]';
   const supportedHosts = ['vk.com','www.vk.com','vk.ru','www.vk.ru','vkvideo.ru','www.vkvideo.ru'];
   const commentLinks = 'a[href*="reply="], a[href*="comment="], a[href*="comment_id="]';
   let selectedMarkup = null, pickHandler = null;
@@ -31,13 +31,15 @@
   }
   function diagnostics() {
     const post=postId(), root=scope(post);
-    return {version:'0.4.0',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
+    return {version:'0.4.1',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
       counts:{legacy_candidates:root.querySelectorAll(commentSelector).length,
         modern_texts:root.querySelectorAll('[data-testid="comment-text"]').length,
+        modern_cards:root.querySelectorAll('[data-testid="comment"]').length,
         reply_links:root.querySelectorAll('a[href*="reply="]').length,
         video_comment_links:root.querySelectorAll('a[href*="comment="], a[href*="comment_id="]').length,
         thread_links:root.querySelectorAll('a[href*="thread="]').length},
       buttons:loaders(root).slice(0,20).map(el=>({text:el.textContent.trim().slice(0,160),class:el.className})),
+      comment_controls:[...root.querySelectorAll('button, a, [role="button"]')].filter(el=>visible(el)&&/(ответ|комментар|показать|ещ[её]|repl|comment|show)/i.test(el.textContent)).slice(0,40).map(el=>({text:el.textContent.trim().slice(0,160),testid:el.getAttribute('data-testid')})),
       permalink_samples:[...root.querySelectorAll(commentLinks)].slice(0,6).map(link=>{
         let node=link, best=link;
         for(let i=0;node&&node!==root&&i<12;i++,node=node.parentElement){
@@ -84,6 +86,7 @@
     throw new Error('Контейнер обсуждения не найден. Открой пост или видео на отдельной странице, вне ленты.');
   }
   function idOf(el, post) {
+    if(el.getAttribute('data-testid')==='comment' && /^\d+$/.test(el.id||''))return el.id;
     const native = (el.id || '').match(/^(?:reply|comment)(-?\d+)_(\d+)$/);
     if (native) return native[1] === post.owner ? native[2] : null;
     const data = el.getAttribute('data-comment-id') || el.getAttribute('data-reply-id');
@@ -106,8 +109,10 @@
     }catch(_){return null;}
   }
   function candidates(root,post) {
-    const result=[...root.querySelectorAll(commentSelector)].map(el=>({el,id:idOf(el,post),modern:false})).filter(item=>item.id);
+    const result=[...root.querySelectorAll(commentSelector)].map(el=>({el,id:idOf(el,post),modern:false,card:el.getAttribute('data-testid')==='comment'})).filter(item=>item.id);
     for(const textEl of root.querySelectorAll('[data-testid="comment-text"]')){
+      // Explicit cards already identify the comment, even without a permalink.
+      if(textEl.closest('[data-testid="comment"]'))continue;
       let container=textEl.parentElement;
       for(let depth=0;container&&depth<18;depth++,container=container.parentElement){
         if(container.querySelectorAll('[data-testid="comment-text"]').length!==1)break;
@@ -128,12 +133,12 @@
       const {el,id}=candidate;
       const own = selector => [...el.querySelectorAll(selector)].find(child => candidate.modern || child.closest(commentSelector) === el) || null;
       const textEl = candidate.textEl || own('.wall_reply_text, .reply_text, [data-testid="comment-text"]');
-      const author = own('.author, .reply_author, [data-testid="comment-author"]') || (candidate.modern?[...el.querySelectorAll('a[href]')].find(link=>{
+      const author = own('.author, .reply_author, [data-testid="comment-author"], [data-testid="comment-owner"]') || (candidate.modern?[...el.querySelectorAll('a[href]')].find(link=>{
         if(!link.textContent.trim()||permalink(link,post))return false;
         try{const url=new URL(link.href,location.href);return supportedHosts.includes(url.hostname)&&/^\/[a-zA-Z0-9_.]+\/?$/.test(url.pathname)&&!['/feed','/im','/login','/away.php'].includes(url.pathname);}catch(_){return false;}
       }):null);
-      const dateEl = own('time, .rel_date, .reply_date') || candidate.link;
-      const likeEl = own('.like_count, .like_btn_count, [data-testid="like-count"]');
+      const dateEl = own('time, .rel_date, .reply_date') || candidate.link || (candidate.card?[...el.querySelectorAll('span')].find(span=>span.closest(commentSelector)===el&&!span.closest('[data-testid="comment-text"]')&&!span.closest('[data-testid="comment-owner"]')&&/^(?:\d+\s+(?:секунд|минут|час|дн|ден|недел|месяц|год|лет).{0,20}назад|сегодня|вчера|\d{1,2}\s+[а-я]{3,})/i.test(span.textContent.trim())):null);
+      const likeEl = own('.like_count, .like_btn_count, [data-testid="like-count"], [data-testid="comment-like"]');
       const parentLink = candidate.modern?null:own(commentLinks);
       let parent = el.getAttribute('data-parent-comment-id') || candidate.root || '';
       if (!parent && parentLink) {
@@ -174,6 +179,7 @@
     return [...root.querySelectorAll('button, a, [role="button"]')].filter(el => {
       if (!visible(el) || el.closest('#vk-comments-extension')) return false;
       const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if(/^(?:\d+\s+(?:ответ(?:а|ов)?|repl(?:y|ies))|все\s+\d+\s+ответ(?:а|ов)?)$/i.test(text))return true;
       const fullText=/^(показать полностью|читать полностью|show more|read more)$/i.test(text)&&!!el.parentElement?.querySelector('[data-testid="comment-text"], [data-testid="showmoretext-in"]');
       return /^(показать|загрузить|ещ[её]|предыдущие|следующие|show|load|view|more|читать)/i.test(text)
         && (/(комментар|ответ|comment|repl)/i.test(text)||fullText)
