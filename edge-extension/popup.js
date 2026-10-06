@@ -16,7 +16,7 @@ function download(data, mime, name) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 async function send(type) {
-  if (!tabId) throw new Error('Открой пост VK и снова нажми значок расширения.');
+  if (!tabId) throw new Error('Открой пост VK или видео VK Видео и снова нажми значок расширения.');
   const answer = await chrome.tabs.sendMessage(tabId, {type});
   if (answer.error) throw new Error(answer.error);
   return answer;
@@ -54,7 +54,7 @@ for (const id of ['start','stop','csv','xlsx','report']) {
   try {
     const [tab] = await chrome.tabs.query({active:true, currentWindow:true});
     const url = new URL(tab.url);
-    if (!['vk.com','www.vk.com','vk.ru','www.vk.ru'].includes(url.hostname) || url.protocol !== 'https:') throw new Error('Открой HTTPS-страницу поста VK.');
+    if (!['vk.com','www.vk.com','vk.ru','www.vk.ru','vkvideo.ru','www.vkvideo.ru'].includes(url.hostname) || url.protocol !== 'https:') throw new Error('Открой HTTPS-страницу поста VK или видео на vkvideo.ru.');
     tabId = tab.id;
     await chrome.scripting.executeScript({target: {tabId}, files: ['content.js']});
     await refresh();

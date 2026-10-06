@@ -4,7 +4,9 @@
   const state = { running: false, stop: false, records: new Map(), report: null, message: 'Готов к запуску.' };
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const visible = el => !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden';
-  const commentSelector = '[id^="reply"], [data-comment-id], [data-reply-id]';
+  const commentSelector = '[id^="reply"], [id^="comment"], [data-comment-id], [data-reply-id]';
+  const supportedHosts = ['vk.com','www.vk.com','vk.ru','www.vk.ru','vkvideo.ru','www.vkvideo.ru'];
+  const commentLinks = 'a[href*="reply="], a[href*="comment="], a[href*="comment_id="]';
   let selectedMarkup = null, pickHandler = null;
   const escapeHtml = text => String(text).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
   function safeMarkup(node, depth=0) {
@@ -17,9 +19,9 @@
     if(node.tagName==='A') {
       try {
         const url=new URL(node.getAttribute('href')||'',location.href);
-        if(['vk.com','www.vk.com','vk.ru','www.vk.ru'].includes(url.hostname)) {
+        if(supportedHosts.includes(url.hostname)) {
           const clean=new URL(url.origin+url.pathname);
-          for(const key of ['reply','thread','w'])if(url.searchParams.has(key))clean.searchParams.set(key,url.searchParams.get(key));
+          for(const key of ['reply','comment','comment_id','thread','w','z'])if(url.searchParams.has(key))clean.searchParams.set(key,url.searchParams.get(key));
           attrs.push(`href="${escapeHtml(clean.href)}"`);
         }
       }catch(_){}
@@ -29,13 +31,14 @@
   }
   function diagnostics() {
     const post=postId(), root=scope(post);
-    return {version:'0.3.0',post_url:`https://vk.com/wall${post.key}`,created_at:new Date().toISOString(),
+    return {version:'0.4.0',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
       counts:{legacy_candidates:root.querySelectorAll(commentSelector).length,
         modern_texts:root.querySelectorAll('[data-testid="comment-text"]').length,
         reply_links:root.querySelectorAll('a[href*="reply="]').length,
+        video_comment_links:root.querySelectorAll('a[href*="comment="], a[href*="comment_id="]').length,
         thread_links:root.querySelectorAll('a[href*="thread="]').length},
       buttons:loaders(root).slice(0,20).map(el=>({text:el.textContent.trim().slice(0,160),class:el.className})),
-      permalink_samples:[...root.querySelectorAll('a[href*="reply="]')].slice(0,6).map(link=>{
+      permalink_samples:[...root.querySelectorAll(commentLinks)].slice(0,6).map(link=>{
         let node=link, best=link;
         for(let i=0;node&&node!==root&&i<12;i++,node=node.parentElement){
           const count=node.querySelectorAll('[data-testid="comment-text"]').length;
@@ -66,19 +69,22 @@
   }
   function postId() {
     const url = new URL(location.href);
-    const match = (url.pathname + ' ' + (url.searchParams.get('w') || '')).match(/wall(-?\d+)_(\d+)/);
-    if (!match) throw new Error('Открой отдельный пост по ссылке вида https://vk.com/wall-123_456.');
-    return { owner: match[1], post: match[2], key: `${match[1]}_${match[2]}` };
+    if(url.protocol!=='https:'||!supportedHosts.includes(url.hostname))throw new Error('Открой HTTPS-страницу VK или VK Видео.');
+    const match = (url.pathname + ' ' + (url.searchParams.get('w') || '') + ' ' + (url.searchParams.get('z') || '')).match(/(wall|video)(-?\d+)_(\d+)/);
+    if (!match) throw new Error('Открой отдельную страницу поста wall… или видео video… .');
+    const kind=match[1],key=`${match[2]}_${match[3]}`;
+    return { kind, owner: match[2], post: match[3], key, identity:kind+key,
+      url:kind==='video'?`https://vkvideo.ru/video${key}`:`https://vk.com/wall${key}` };
   }
   function scope(post) {
-    const exact = document.getElementById('post' + post.key);
+    const exact = post.kind==='wall'?document.getElementById('post' + post.key):null;
     if (exact) return exact;
     // Only the standalone post route can use the page as a scope. A feed is ambiguous.
-    if (new URL(location.href).pathname.match(/^\/wall-?\d+_\d+\/?$/)) return document.body;
-    throw new Error('Контейнер выбранного поста не найден. Открой пост на отдельной странице, вне ленты.');
+    if (new URL(location.href).pathname.match(/^\/(wall|video)-?\d+_\d+\/?$/)) return document.body;
+    throw new Error('Контейнер обсуждения не найден. Открой пост или видео на отдельной странице, вне ленты.');
   }
   function idOf(el, post) {
-    const native = (el.id || '').match(/^reply(-?\d+)_(\d+)$/);
+    const native = (el.id || '').match(/^(?:reply|comment)(-?\d+)_(\d+)$/);
     if (native) return native[1] === post.owner ? native[2] : null;
     const data = el.getAttribute('data-comment-id') || el.getAttribute('data-reply-id');
     if (data && /^\d+$/.test(data)) return data;
@@ -91,10 +97,10 @@
   function permalink(link, post) {
     try {
       const url=new URL(link.href,location.href);
-      if(!['vk.com','www.vk.com','vk.ru','www.vk.ru'].includes(url.hostname))return null;
-      const wall=(url.pathname+' '+(url.searchParams.get('w')||'')).match(/wall(-?\d+)_(\d+)/);
-      if(!wall||wall[1]!==post.owner||wall[2]!==post.post)return null;
-      const id=url.searchParams.get('reply'), thread=url.searchParams.get('thread');
+      if(url.protocol!=='https:'||!supportedHosts.includes(url.hostname))return null;
+      const target=(url.pathname+' '+(url.searchParams.get('w')||'')+' '+(url.searchParams.get('z')||'')).match(/(wall|video)(-?\d+)_(\d+)/);
+      if(!target||target[1]!==post.kind||target[2]!==post.owner||target[3]!==post.post)return null;
+      const id=url.searchParams.get('reply')||url.searchParams.get('comment')||url.searchParams.get('comment_id'), thread=url.searchParams.get('thread');
       if(!id||!/^\d+$/.test(id))return null;
       return {id,root:thread&&/^\d+$/.test(thread)&&thread!==id?thread:''};
     }catch(_){return null;}
@@ -105,7 +111,7 @@
       let container=textEl.parentElement;
       for(let depth=0;container&&depth<18;depth++,container=container.parentElement){
         if(container.querySelectorAll('[data-testid="comment-text"]').length!==1)break;
-        const links=[...container.querySelectorAll('a[href*="reply="]')].filter(link=>!textEl.contains(link)).map(link=>({link,ref:permalink(link,post)})).filter(item=>item.ref);
+        const links=[...container.querySelectorAll(commentLinks)].filter(link=>!textEl.contains(link)).map(link=>({link,ref:permalink(link,post)})).filter(item=>item.ref);
         const ids=new Set(links.map(item=>item.ref.id));
         // Never assign the ID of another comment mentioned inside the text.
         if(ids.size===1){
@@ -124,15 +130,15 @@
       const textEl = candidate.textEl || own('.wall_reply_text, .reply_text, [data-testid="comment-text"]');
       const author = own('.author, .reply_author, [data-testid="comment-author"]') || (candidate.modern?[...el.querySelectorAll('a[href]')].find(link=>{
         if(!link.textContent.trim()||permalink(link,post))return false;
-        try{const url=new URL(link.href,location.href);return ['vk.com','www.vk.com','vk.ru','www.vk.ru'].includes(url.hostname)&&/^\/[a-zA-Z0-9_.]+\/?$/.test(url.pathname)&&!['/feed','/im','/login','/away.php'].includes(url.pathname);}catch(_){return false;}
+        try{const url=new URL(link.href,location.href);return supportedHosts.includes(url.hostname)&&/^\/[a-zA-Z0-9_.]+\/?$/.test(url.pathname)&&!['/feed','/im','/login','/away.php'].includes(url.pathname);}catch(_){return false;}
       }):null);
       const dateEl = own('time, .rel_date, .reply_date') || candidate.link;
       const likeEl = own('.like_count, .like_btn_count, [data-testid="like-count"]');
-      const parentLink = own('a[href*="reply="]');
+      const parentLink = candidate.modern?null:own(commentLinks);
       let parent = el.getAttribute('data-parent-comment-id') || candidate.root || '';
       if (!parent && parentLink) {
         try {
-          const value = new URL(parentLink.href).searchParams.get('reply');
+          const value = permalink(parentLink,post)?.id;
           if (value && value !== id) parent = value;
         } catch (_) {}
       }
@@ -153,7 +159,7 @@
         author_name: (author?.textContent || '').trim(), author_profile_url: profileUrl,
         user_id: user ? (user[1] === 'id' ? '' : '-') + user[2] : '', date,
         text: textEl?.innerText ?? '', is_reply: parent ? true : '', likes,
-        comment_url: `https://vk.com/wall${post.key}?reply=${id}`,
+        comment_url: candidate.link?.href || (post.kind==='wall'?`${post.url}?reply=${id}`:''),
         date_display: (dateEl?.textContent || '').trim(), parent_known: !!parent,
         text_extracted: !!textEl
       };
@@ -200,14 +206,14 @@
     let root = scope(post);
     state.records.clear();
     state.stop = false; state.running = true;
-    state.report = { post_url: `https://vk.com/wall${post.key}`, started_at: new Date().toISOString(),
+    state.report = { post_url: post.url, target_type:post.kind, started_at: new Date().toISOString(),
       status: 'running', completeness: 'Не подтверждена', warnings: [], rounds: 0 };
     state.message = 'Сбор начат. Не обновляй вкладку.';
     let idle = 0, loaderCursor = 0;
     try {
       for (let round = 0; round < 2000; round++) {
         if (state.stop) { state.report.status = 'stopped'; break; }
-        if (postId().key !== post.key) throw new Error('Открыт другой пост: сбор остановлен.');
+        if (postId().identity !== post.identity) throw new Error('Открыт другой пост или видео: сбор остановлен.');
         root = scope(post);
         const before = state.records.size;
         collect(root, post);
