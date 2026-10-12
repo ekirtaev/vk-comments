@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VK Comments — Edge",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Выгрузка комментариев VK через API или экспериментальный сбор страницы. CSV/XLSX.",
   "permissions": [
     "activeTab",
@@ -13,5 +13,8 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "VK Comments"
+  },
+  "background": {
+    "service_worker": "background.js"
   }
 }

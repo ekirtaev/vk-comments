@@ -7,6 +7,18 @@
   const commentSelector = '[id^="reply"], [id^="comment"], [data-comment-id], [data-reply-id], [data-testid="comment"]';
   const supportedHosts = ['vk.com','www.vk.com','vk.ru','www.vk.ru','vkvideo.ru','www.vkvideo.ru'];
   const commentLinks = 'a[href*="reply="], a[href*="comment="], a[href*="comment_id="]';
+  let componentData = new Map(), componentReport = null;
+  const replyCount = text => /^(?:\d+\s+(?:ответ(?:а|ов)?|repl(?:y|ies))|все\s+\d+\s+ответ(?:а|ов)?)$/i.test(text);
+  async function readComponentData(post) {
+    if(post.kind!=='video')return;
+    try {
+      const data=await chrome.runtime.sendMessage({type:'vk-page-data'});
+      if(postId().identity!==post.identity)return;
+      if(!data||data.error)throw new Error(data?.error||'Нет ответа от расширения.');
+      componentReport={inspected:data.inspected,matched:data.matched,schemas:data.schemas};
+      componentData=new Map((data.comments||[]).map(record=>[record.comment_id,record]));
+    }catch(error){componentReport={error:error.message};}
+  }
   let selectedMarkup = null, pickHandler = null;
   const escapeHtml = text => String(text).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
   function safeMarkup(node, depth=0) {
@@ -31,7 +43,7 @@
   }
   function diagnostics() {
     const post=postId(), root=scope(post);
-    return {version:'0.4.3',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
+    return {version:'0.4.4',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
       counts:{legacy_candidates:root.querySelectorAll(commentSelector).length,
         modern_texts:root.querySelectorAll('[data-testid="comment-text"]').length,
         modern_cards:root.querySelectorAll('[data-testid="comment"]').length,
@@ -53,6 +65,7 @@
         card_attributes:Object.fromEntries(['data-author-id','data-from-id'].map(key=>[key,card.getAttribute(key)])),
         author:[...card.querySelectorAll('[data-testid="comment-owner"], [data-testid="comment-author"], a[href]')].filter(node=>node.closest('[data-testid="comment"]')===card&&!node.closest('[data-testid="comment-text"]')).slice(0,8).map(node=>safeMarkup(node).slice(0,4000))
       })),
+      component_data:componentReport,
       selected_comment:selectedMarkup,
       note:'Только выбранный фрагмент страницы и признаки разметки. Проверь содержимое перед отправкой. Cookies, токены, поля форм и скрипты не собираются.'};
   }
@@ -144,6 +157,7 @@
     let added = 0;
     for (const candidate of candidates(root,post)) {
       const {el,id}=candidate;
+      const extra=componentData.get(id)||{};
       const own = selector => [...el.querySelectorAll(selector)].find(child => candidate.modern || child.closest(commentSelector) === el) || null;
       const textEl = candidate.textEl || own('.wall_reply_text, .reply_text, [data-testid="comment-text"]');
       const belongs = node => (candidate.modern || node.closest(commentSelector) === el) && !textEl?.contains(node);
@@ -152,7 +166,7 @@
         try {
           const url=new URL(node.getAttribute('href')||'',location.href);
           if(url.protocol!=='https:'||!supportedHosts.includes(url.hostname)||permalink(node,post))return '';
-          if(!/^\/[a-zA-Z0-9_.]+\/?$/.test(url.pathname)||/^\/(?:feed|im|login|away\.php|wall-?\d+_\d+|video-?\d+_\d+)\/?$/.test(url.pathname))return '';
+          if(!/^\/@?[a-zA-Z0-9_.]+\/?$/.test(url.pathname)||/^\/(?:feed|im|login|away\.php|wall-?\d+_\d+|video-?\d+_\d+)\/?$/.test(url.pathname))return '';
           return url.origin+url.pathname;
         }catch(_){return '';}
       };
@@ -170,7 +184,8 @@
         });
       const likeEl = own('.like_count, .like_btn_count, [data-testid="like-count"], [data-testid="comment-like"]');
       const parentLink = candidate.modern?null:own(commentLinks);
-      let parent = el.getAttribute('data-parent-comment-id') || candidate.root || '';
+      let parent = el.getAttribute('data-parent-comment-id') || extra.parent_comment_id || candidate.root || '';
+      const replyMarker=own('[data-testid="comment-reply-parent"]');
       if (!parent && parentLink) {
         try {
           const value = permalink(parentLink,post)?.id;
@@ -182,7 +197,7 @@
         if (ancestor) parent = idOf(ancestor, post) || '';
       }
       let profileUrl = profileLink(authorLink);
-      const user = profileUrl.match(/\/(id|club|public)(\d+)(?:[/?#]|$)/);
+      const user = profileUrl.match(/\/@?(id|club|public)(\d+)(?:[/?#]|$)/);
       let userId = user ? (user[1] === 'id' ? '' : '-') + user[2] : '';
       // Vanity URLs do not encode IDs; use only explicit author metadata.
       for(const node of [author,authorLink]){
@@ -199,6 +214,8 @@
           if(value&&/^-?[1-9]\d*$/.test(value)){userId=value;break;}
         }
       }
+      if(!userId&&extra.user_id)userId=extra.user_id;
+      if(!profileUrl&&extra.author_profile_url)profileUrl=extra.author_profile_url;
       if(!profileUrl&&userId)profileUrl=`https://vk.com/${userId.startsWith('-')?'club'+userId.slice(1):'id'+userId}`;
       const rawLikes = (likeEl?.textContent || '').trim();
       const likes = /^\d+$/.test(rawLikes) ? Number(rawLikes) : '';
@@ -207,13 +224,14 @@
         comment_id: id, parent_comment_id: parent,
         author_name: (author?.textContent || '').trim(), author_profile_url: profileUrl,
         user_id: userId,
-        text: textEl?.innerText ?? '', is_reply: parent ? true : '', likes,
+        text: textEl?.innerText ?? '', is_reply: parent || replyMarker ? true : (extra.is_reply ?? ''), likes,
         comment_url: candidate.link?.href || (post.kind==='wall'?`${post.url}?reply=${id}`:''),
-        parent_known: !!parent,
+        parent_known: !!parent || extra.is_reply === false,
         text_extracted: !!textEl
       };
       // Keep metadata/text already extracted if a later virtualized element has blanks.
       if (old) for (const key of Object.keys(record)) if (record[key] === '' && old[key] !== '') record[key] = old[key];
+      record.parent_known=!!record.parent_comment_id||record.is_reply===false;
       if (!old) added++;
       state.records.set(id, record);
     }
@@ -223,7 +241,12 @@
     return [...root.querySelectorAll('button, a, [role="button"]')].filter(el => {
       if (!visible(el) || el.closest('#vk-comments-extension')) return false;
       const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if(/^(?:\d+\s+(?:ответ(?:а|ов)?|repl(?:y|ies))|все\s+\d+\s+ответ(?:а|ов)?)$/i.test(text))return true;
+      if(replyCount(text))return true;
+      if(/^показать\s+ещ[её]\s*\(\d+\)$/i.test(text)){
+        for(let container=el.parentElement,depth=0;container&&container!==root&&depth<6;container=container.parentElement,depth++){
+          if(container.querySelector('[data-testid="comment"]'))return true;
+        }
+      }
       const fullText=/^(показать полностью|читать полностью|show more|read more)$/i.test(text)&&!!el.parentElement?.querySelector('[data-testid="comment-text"], [data-testid="showmoretext-in"]');
       return /^(показать|загрузить|ещ[её]|предыдущие|следующие|show|load|view|more|читать)/i.test(text)
         && (/(комментар|ответ|comment|repl)/i.test(text)||fullText)
@@ -254,25 +277,32 @@
     if (state.running) return;
     const post = postId();
     let root = scope(post);
-    state.records.clear();
+    state.records.clear(); componentData.clear(); componentReport=null;
     state.stop = false; state.running = true;
     state.report = { post_url: post.url, target_type:post.kind, started_at: new Date().toISOString(),
       status: 'running', completeness: 'Не подтверждена', warnings: [], rounds: 0 };
     state.message = 'Сбор начат. Не обновляй вкладку.';
     let idle = 0, loaderCursor = 0;
+    const expanded=new WeakSet();
     try {
       for (let round = 0; round < 2000; round++) {
         if (state.stop) { state.report.status = 'stopped'; break; }
         if (postId().identity !== post.identity) throw new Error('Открыт другой пост или видео: сбор остановлен.');
         root = scope(post);
         const before = state.records.size;
+        await readComponentData(post);
         collect(root, post);
-        const buttons = loaders(root);
+        const buttons = loaders(root).filter(button=>!expanded.has(button));
         // One loading action at a time avoids racing several independent requests.
-        if (buttons.length) buttons[loaderCursor++ % buttons.length].click();
+        if (buttons.length) {
+          const button=buttons[loaderCursor++ % buttons.length];
+          if(replyCount(button.textContent.replace(/\s+/g,' ').trim()))expanded.add(button);
+          button.click();
+        }
         const moved = advance(root);
         await sleep(3500 + Math.min(idle * 1000, 5000));
         root = scope(post);
+        await readComponentData(post);
         collect(root, post);
         idle = state.records.size > before || moved ? 0 : idle + 1;
         state.report.rounds = round + 1;
@@ -291,6 +321,9 @@
       state.running = false;
       state.report.finished_at = new Date().toISOString();
       state.report.unique_comments = state.records.size;
+      state.report.component_data=componentReport;
+      state.report.missing_author_id=[...state.records.values()].filter(r=>!r.user_id).length;
+      state.report.replies_without_parent=[...state.records.values()].filter(r=>r.is_reply===true&&!r.parent_comment_id).length;
       state.report.missing_text = [...state.records.values()].filter(r => !r.text_extracted).length;
       state.report.unknown_parent = [...state.records.values()].filter(r => !r.parent_known).length;
       state.message = `Сбор остановлен: ${state.report.status}.\nЗаписей: ${state.records.size}. Полнота не подтверждена.\nСкачай результат и отчёт.`;
@@ -298,7 +331,8 @@
   }
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request.type === 'vk-diagnostics') {
-      try { sendResponse(diagnostics()); } catch(error) { sendResponse({error:error.message}); }
+      (async()=>{try { await readComponentData(postId()); sendResponse(diagnostics()); } catch(error) { sendResponse({error:error.message}); }})();
+      return true;
     } else if(request.type === 'vk-pick') {
       try { postId(); scope(postId()); pickComment(); sendResponse({ok:true}); } catch(error) { sendResponse({error:error.message}); }
     } else if (request.type === 'vk-start') {
