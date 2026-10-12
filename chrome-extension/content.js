@@ -13,7 +13,7 @@
     if (node.nodeType === 3) return escapeHtml(node.textContent.slice(0,1500));
     if (node.nodeType !== 1 || /^(SCRIPT|STYLE|INPUT|TEXTAREA|SELECT|IFRAME|SVG|IMG|VIDEO|AUDIO|FORM)$/.test(node.tagName)) return '';
     const attrs=[];
-    for (const name of ['id','class','role','title','aria-label','data-testid','data-comment-id','data-reply-id','data-parent-comment-id','data-post-id','data-time','datetime']) {
+    for (const name of ['id','class','role','title','aria-label','data-testid','data-comment-id','data-reply-id','data-parent-comment-id','data-post-id','data-time','datetime','data-user-id','data-from-id','data-owner-id','data-author-id']) {
       const value=node.getAttribute(name); if(value!==null)attrs.push(`${name}="${escapeHtml(value.slice(0,400))}"`);
     }
     if(node.tagName==='A') {
@@ -31,7 +31,7 @@
   }
   function diagnostics() {
     const post=postId(), root=scope(post);
-    return {version:'0.4.2',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
+    return {version:'0.4.3',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
       counts:{legacy_candidates:root.querySelectorAll(commentSelector).length,
         modern_texts:root.querySelectorAll('[data-testid="comment-text"]').length,
         modern_cards:root.querySelectorAll('[data-testid="comment"]').length,
@@ -49,6 +49,10 @@
         }
         return safeMarkup(best).slice(0,16000);
       }),
+      author_samples:[...root.querySelectorAll('[data-testid="comment"]')].slice(0,6).map(card=>({
+        card_attributes:Object.fromEntries(['data-author-id','data-from-id'].map(key=>[key,card.getAttribute(key)])),
+        author:[...card.querySelectorAll('[data-testid="comment-owner"], [data-testid="comment-author"], a[href]')].filter(node=>node.closest('[data-testid="comment"]')===card&&!node.closest('[data-testid="comment-text"]')).slice(0,8).map(node=>safeMarkup(node).slice(0,4000))
+      })),
       selected_comment:selectedMarkup,
       note:'Только выбранный фрагмент страницы и признаки разметки. Проверь содержимое перед отправкой. Cookies, токены, поля форм и скрипты не собираются.'};
   }
@@ -156,7 +160,14 @@
         [...el.querySelectorAll('a[href]')].find(link=>belongs(link)&&link.textContent.trim()&&profileLink(link));
       const authorLink = profileLink(author) ? author :
         [...(author?.querySelectorAll('a[href]')||[])].find(link=>profileLink(link)) ||
-        (author?.closest('a[href]') && profileLink(author.closest('a[href]')) ? author.closest('a[href]') : null);
+        (author?.closest('a[href]') && profileLink(author.closest('a[href]')) ? author.closest('a[href]') : null) ||
+        [...el.querySelectorAll('a[href]')].find(link=>{
+          if(!profileLink(link))return false;
+          const name=(author?.textContent||'').trim();
+          return (name && link.textContent.trim()===name) || !!link.querySelector('img') ||
+            /^(?:comment|owner|author)-avatar$/.test(link.getAttribute('data-testid')||'') ||
+            !!link.querySelector('[data-testid="comment-avatar"], [data-testid="owner-avatar"], [data-testid="author-avatar"]');
+        });
       const likeEl = own('.like_count, .like_btn_count, [data-testid="like-count"], [data-testid="comment-like"]');
       const parentLink = candidate.modern?null:own(commentLinks);
       let parent = el.getAttribute('data-parent-comment-id') || candidate.root || '';
@@ -170,17 +181,25 @@
         const ancestor = el.parentElement?.closest(commentSelector);
         if (ancestor) parent = idOf(ancestor, post) || '';
       }
-      const profileUrl = profileLink(authorLink);
+      let profileUrl = profileLink(authorLink);
       const user = profileUrl.match(/\/(id|club|public)(\d+)(?:[/?#]|$)/);
       let userId = user ? (user[1] === 'id' ? '' : '-') + user[2] : '';
       // Vanity URLs do not encode IDs; use only explicit author metadata.
       for(const node of [author,authorLink]){
         if(userId||!node)continue;
-        for(const attr of ['data-user-id','data-from-id','data-owner-id']){
+        for(const attr of ['data-user-id','data-from-id','data-owner-id','data-author-id']){
           const value=node.getAttribute(attr);
-          if(value&&/^-?\d+$/.test(value)){userId=value;break;}
+          if(value&&/^-?[1-9]\d*$/.test(value)){userId=value;break;}
         }
       }
+      if(!userId){
+        // Card ID is the comment ID. Only explicit author attributes identify its author.
+        for(const attr of ['data-author-id','data-from-id']){
+          const value=el.getAttribute(attr);
+          if(value&&/^-?[1-9]\d*$/.test(value)){userId=value;break;}
+        }
+      }
+      if(!profileUrl&&userId)profileUrl=`https://vk.com/${userId.startsWith('-')?'club'+userId.slice(1):'id'+userId}`;
       const rawLikes = (likeEl?.textContent || '').trim();
       const likes = /^\d+$/.test(rawLikes) ? Number(rawLikes) : '';
       const old = state.records.get(id);
