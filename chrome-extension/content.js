@@ -31,7 +31,7 @@
   }
   function diagnostics() {
     const post=postId(), root=scope(post);
-    return {version:'0.4.1',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
+    return {version:'0.4.2',post_url:post.url,target_type:post.kind,created_at:new Date().toISOString(),
       counts:{legacy_candidates:root.querySelectorAll(commentSelector).length,
         modern_texts:root.querySelectorAll('[data-testid="comment-text"]').length,
         modern_cards:root.querySelectorAll('[data-testid="comment"]').length,
@@ -120,7 +120,16 @@
         const ids=new Set(links.map(item=>item.ref.id));
         // Never assign the ID of another comment mentioned inside the text.
         if(ids.size===1){
-          const item=links[0];result.push({el:container,id:item.ref.id,root:item.ref.root,link:item.link,textEl,modern:true});break;
+          const item=links[0];
+          // The permalink and text may share a smaller wrapper than the author.
+          let card=container;
+          for(let ancestor=container.parentElement;ancestor&&ancestor!==root;ancestor=ancestor.parentElement){
+            if(ancestor.querySelectorAll('[data-testid="comment-text"]').length!==1)break;
+            const refs=[...ancestor.querySelectorAll(commentLinks)].filter(link=>!textEl.contains(link)).map(link=>permalink(link,post)).filter(Boolean);
+            if(refs.some(ref=>ref.id!==item.ref.id))break;
+            card=ancestor;
+          }
+          result.push({el:card,id:item.ref.id,root:item.ref.root,link:item.link,textEl,modern:true});break;
         }
         if(container===root)break;
       }
@@ -133,11 +142,21 @@
       const {el,id}=candidate;
       const own = selector => [...el.querySelectorAll(selector)].find(child => candidate.modern || child.closest(commentSelector) === el) || null;
       const textEl = candidate.textEl || own('.wall_reply_text, .reply_text, [data-testid="comment-text"]');
-      const author = own('.author, .reply_author, [data-testid="comment-author"], [data-testid="comment-owner"]') || (candidate.modern?[...el.querySelectorAll('a[href]')].find(link=>{
-        if(!link.textContent.trim()||permalink(link,post))return false;
-        try{const url=new URL(link.href,location.href);return supportedHosts.includes(url.hostname)&&/^\/[a-zA-Z0-9_.]+\/?$/.test(url.pathname)&&!['/feed','/im','/login','/away.php'].includes(url.pathname);}catch(_){return false;}
-      }):null);
-      const dateEl = own('time, .rel_date, .reply_date') || candidate.link || (candidate.card?[...el.querySelectorAll('span')].find(span=>span.closest(commentSelector)===el&&!span.closest('[data-testid="comment-text"]')&&!span.closest('[data-testid="comment-owner"]')&&/^(?:\d+\s+(?:секунд|минут|час|дн|ден|недел|месяц|год|лет).{0,20}назад|сегодня|вчера|\d{1,2}\s+[а-я]{3,})/i.test(span.textContent.trim())):null);
+      const belongs = node => (candidate.modern || node.closest(commentSelector) === el) && !textEl?.contains(node);
+      const profileLink = node => {
+        if (!node || node.tagName !== 'A' || !belongs(node)) return '';
+        try {
+          const url=new URL(node.getAttribute('href')||'',location.href);
+          if(url.protocol!=='https:'||!supportedHosts.includes(url.hostname)||permalink(node,post))return '';
+          if(!/^\/[a-zA-Z0-9_.]+\/?$/.test(url.pathname)||/^\/(?:feed|im|login|away\.php|wall-?\d+_\d+|video-?\d+_\d+)\/?$/.test(url.pathname))return '';
+          return url.origin+url.pathname;
+        }catch(_){return '';}
+      };
+      const author = own('.author, .reply_author, [data-testid="comment-author"], [data-testid="comment-owner"]') ||
+        [...el.querySelectorAll('a[href]')].find(link=>belongs(link)&&link.textContent.trim()&&profileLink(link));
+      const authorLink = profileLink(author) ? author :
+        [...(author?.querySelectorAll('a[href]')||[])].find(link=>profileLink(link)) ||
+        (author?.closest('a[href]') && profileLink(author.closest('a[href]')) ? author.closest('a[href]') : null);
       const likeEl = own('.like_count, .like_btn_count, [data-testid="like-count"], [data-testid="comment-like"]');
       const parentLink = candidate.modern?null:own(commentLinks);
       let parent = el.getAttribute('data-parent-comment-id') || candidate.root || '';
@@ -151,21 +170,27 @@
         const ancestor = el.parentElement?.closest(commentSelector);
         if (ancestor) parent = idOf(ancestor, post) || '';
       }
-      const profileUrl = author?.href || '';
+      const profileUrl = profileLink(authorLink);
       const user = profileUrl.match(/\/(id|club|public)(\d+)(?:[/?#]|$)/);
-      const unix = dateEl?.getAttribute('data-time') || dateEl?.getAttribute('data-timestamp');
-      const parsedDate=unix&&/^\d+$/.test(unix)?new Date(Number(unix)*1000):null;
-      const date = parsedDate&&Number.isFinite(parsedDate.getTime()) ? parsedDate.toISOString() : dateEl?.getAttribute('datetime') || '';
+      let userId = user ? (user[1] === 'id' ? '' : '-') + user[2] : '';
+      // Vanity URLs do not encode IDs; use only explicit author metadata.
+      for(const node of [author,authorLink]){
+        if(userId||!node)continue;
+        for(const attr of ['data-user-id','data-from-id','data-owner-id']){
+          const value=node.getAttribute(attr);
+          if(value&&/^-?\d+$/.test(value)){userId=value;break;}
+        }
+      }
       const rawLikes = (likeEl?.textContent || '').trim();
       const likes = /^\d+$/.test(rawLikes) ? Number(rawLikes) : '';
       const old = state.records.get(id);
       const record = {
         comment_id: id, parent_comment_id: parent,
         author_name: (author?.textContent || '').trim(), author_profile_url: profileUrl,
-        user_id: user ? (user[1] === 'id' ? '' : '-') + user[2] : '', date,
+        user_id: userId,
         text: textEl?.innerText ?? '', is_reply: parent ? true : '', likes,
         comment_url: candidate.link?.href || (post.kind==='wall'?`${post.url}?reply=${id}`:''),
-        date_display: (dateEl?.textContent || '').trim(), parent_known: !!parent,
+        parent_known: !!parent,
         text_extracted: !!textEl
       };
       // Keep metadata/text already extracted if a later virtualized element has blanks.

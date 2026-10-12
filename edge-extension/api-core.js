@@ -1,6 +1,6 @@
 /* VK API transport and traversal. Does not persist credentials or raw error payloads. */
 globalThis.VKApi = (() => {
-  const fields = ['comment_id','parent_comment_id','thread_root_id','author_name','author_profile_url','user_id','date','text','is_reply','likes','comment_url'];
+  const fields = ['comment_id','parent_comment_id','thread_root_id','author_name','author_profile_url','user_id','text','is_reply','likes','comment_url'];
   class Stopped extends Error { constructor(){super('Остановлено пользователем.');this.name='Stopped';} }
   function parsePost(value) {
     let url;
@@ -123,10 +123,9 @@ globalThis.VKApi = (() => {
       const root=c._root||c.parents_stack?.[0]||'';
       const parent=c.reply_to_comment||root;
       const uid=c.from_id;
-      const timestamp=new Date(c.date*1000);
       return {comment_id:String(c.id),parent_comment_id:parent?String(parent):'',thread_root_id:root?String(root):'',
         author_name:this.authors.get(uid)||'',author_profile_url:uid===undefined?'':`https://vk.com/${uid<0?'club'+(-uid):'id'+uid}`,
-        user_id:uid===undefined?'':String(uid),date:Number.isFinite(c.date)&&Number.isFinite(timestamp.getTime())?timestamp.toISOString():'',text:c.text??'',
+        user_id:uid===undefined?'':String(uid),text:c.text??'',
         is_reply:!!parent,likes:c.likes?.count??'',comment_url:`${this.post.url}?reply=${c.id}`};
     });}
     snapshot(){return {report:{...this.report,snapshot_at:new Date().toISOString()},records:this.rows(),raw_comments:[...this.comments.values()],authors:Object.fromEntries(this.authors)};}

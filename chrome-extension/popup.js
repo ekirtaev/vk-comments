@@ -1,4 +1,4 @@
-const fields = ['comment_id','parent_comment_id','author_name','author_profile_url','user_id','date','text','is_reply','likes','comment_url','date_display','parent_known','text_extracted'];
+const fields = ['comment_id','parent_comment_id','author_name','author_profile_url','user_id','text','is_reply','likes','comment_url','parent_known','text_extracted'];
 let tabId;
 const statusEl = document.getElementById('status');
 document.getElementById('api').addEventListener('click', () => chrome.tabs.create({url: chrome.runtime.getURL('api.html')}));
